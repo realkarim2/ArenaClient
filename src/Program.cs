@@ -15,13 +15,18 @@ internal static class Program
 public sealed class MainForm : Form
 {
     private const string PlaceholderGamePath = "CS 1.6 auto-detecting...";
+    private const string ArenaServerIp = "185.211.103.215";
+    private const string ArenaServerPort = "7703";
+
     private readonly Label steamStatus = new();
     private readonly Label gameStatus = new();
     private readonly Label accountStatus = new();
+    private readonly Label serverStatus = new();
     private readonly ProgressBar progress = new();
     private readonly TextBox gamePath = new();
     private readonly Button installButton = new();
     private readonly Button launchButton = new();
+    private readonly Button connectButton = new();
     private SteamIdentity? steamIdentity;
     private Cs16Install? cs16;
 
@@ -29,7 +34,7 @@ public sealed class MainForm : Form
     {
         Text = "CS Arena Client";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(900, 600);
+        ClientSize = new Size(900, 640);
         BackColor = Color.FromArgb(14, 15, 18);
         ForeColor = Color.White;
         FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -55,7 +60,7 @@ public sealed class MainForm : Form
         var card = new Panel
         {
             Location = new Point(42, 125),
-            Size = new Size(816, 330),
+            Size = new Size(816, 370),
             BackColor = Color.FromArgb(24, 26, 31)
         };
         Controls.Add(card);
@@ -113,12 +118,28 @@ public sealed class MainForm : Form
         launchButton.Click += (_, _) => LaunchGame();
         card.Controls.Add(launchButton);
 
+        serverStatus.Text = $"Server: {ArenaServerIp}:{ArenaServerPort}";
+        serverStatus.ForeColor = Color.FromArgb(170, 175, 185);
+        serverStatus.Location = new Point(28, 305);
+        serverStatus.AutoSize = true;
+        card.Controls.Add(serverStatus);
+
+        connectButton.Text = "CONNECT TO CS ARENA";
+        connectButton.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+        connectButton.Size = new Size(210, 42);
+        connectButton.Location = new Point(554, 230);
+        connectButton.FlatStyle = FlatStyle.Flat;
+        connectButton.BackColor = Color.FromArgb(245, 125, 35);
+        connectButton.ForeColor = Color.White;
+        connectButton.Click += (_, _) => ConnectToArena();
+        card.Controls.Add(connectButton);
+
         Controls.Add(new Label
         {
             Text = "Steam identity is used automatically. ArenaClient does not ask for or store your Steam password.",
             ForeColor = Color.FromArgb(125, 130, 140),
             AutoSize = true,
-            Location = new Point(46, 490)
+            Location = new Point(46, 535)
         });
 
         RefreshState();
@@ -159,28 +180,9 @@ public sealed class MainForm : Form
             gameStatus.ForeColor = Color.Orange;
         }
 
-        launchButton.Enabled = steamIdentity is not null && cs16 is not null;
-    }
-
-    private void BrowseGameFolder()
-    {
-        using var dialog = new FolderBrowserDialog
-        {
-            Description = "Select the CS 1.6 root folder containing cstrike"
-        };
-
-        if (dialog.ShowDialog() != DialogResult.OK)
-            return;
-
-        if (!Directory.Exists(Path.Combine(dialog.SelectedPath, "cstrike")) ||
-            !File.Exists(Path.Combine(dialog.SelectedPath, "hl.exe")))
-        {
-            MessageBox.Show("This folder is not a valid CS 1.6 installation.", "CS Arena");
-            return;
-        }
-
-        cs16 = new Cs16Install(dialog.SelectedPath, Path.Combine(dialog.SelectedPath, "hl.exe"));
-        RefreshState();
+        var ready = steamIdentity is not null && cs16 is not null;
+        launchButton.Enabled = ready;
+        connectButton.Enabled = ready;
     }
 
     private async Task InstallArenaAsync()
@@ -194,9 +196,8 @@ public sealed class MainForm : Form
 
         if (cs16 is null)
         {
-            BrowseGameFolder();
-            if (cs16 is null)
-                return;
+            MessageBox.Show("CS 1.6 was not found. Install CS 1.6 through Steam first.", "CS Arena");
+            return;
         }
 
         SetBusy(true);
@@ -235,24 +236,19 @@ public sealed class MainForm : Form
     {
         installButton.Enabled = !busy;
         launchButton.Enabled = !busy && steamIdentity is not null && cs16 is not null;
+        connectButton.Enabled = !busy && steamIdentity is not null && cs16 is not null;
     }
 
     private void LaunchGame()
     {
         RefreshState();
-        if (steamIdentity is null)
+        if (steamIdentity is null || cs16 is null)
         {
-            MessageBox.Show("Steam must be running and signed in.", "CS Arena");
+            MessageBox.Show("Steam must be running and CS 1.6 must be installed.", "CS Arena");
             return;
         }
 
-        if (cs16 is null)
-        {
-            MessageBox.Show("CS 1.6 was not found. Install CS 1.6 through Steam first.", "CS Arena");
-            return;
-        }
-
-        var launchArguments = $"-game cstrike +name \"{EscapeLaunchArgument(steamIdentity.PersonaName)}\"";
+        var launchArguments = BuildGameArguments(null);
         Process.Start(new ProcessStartInfo
         {
             FileName = cs16.ExecutablePath,
@@ -260,6 +256,36 @@ public sealed class MainForm : Form
             UseShellExecute = true,
             Arguments = launchArguments
         });
+    }
+
+    private void ConnectToArena()
+    {
+        RefreshState();
+        if (steamIdentity is null || cs16 is null)
+        {
+            MessageBox.Show("Steam must be running and CS 1.6 must be installed.", "CS Arena");
+            return;
+        }
+
+        var arguments = BuildGameArguments($"connect {ArenaServerIp}:{ArenaServerPort}");
+        serverStatus.Text = $"Server: connecting to {ArenaServerIp}:{ArenaServerPort}";
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = cs16.ExecutablePath,
+            WorkingDirectory = cs16.RootPath,
+            UseShellExecute = true,
+            Arguments = arguments
+        });
+    }
+
+    private string BuildGameArguments(string? consoleCommand)
+    {
+        var name = EscapeLaunchArgument(steamIdentity!.PersonaName);
+        var arguments = $"-game cstrike +name \"{name}\"";
+        if (!string.IsNullOrWhiteSpace(consoleCommand))
+            arguments += $" +{consoleCommand}";
+        return arguments;
     }
 
     private static string EscapeLaunchArgument(string value)

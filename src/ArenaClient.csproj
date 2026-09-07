@@ -5,7 +5,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>ArenaClient</AssemblyName>
     <RootNamespace>ArenaClient</RootNamespace>
+    <Version>0.1.0</Version>
+    <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
 </Project>

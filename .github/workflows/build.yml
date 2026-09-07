@@ -17,9 +17,15 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Restore
+        run: dotnet restore src/ArenaClient.csproj
+
+      - name: Build
+        run: dotnet build src/ArenaClient.csproj -c Release --no-restore
+
       - name: Publish ArenaClient
         run: >-
-          dotnet publish ArenaClient.csproj
+          dotnet publish src/ArenaClient.csproj
           -c Release
           -r win-x64
           --self-contained true

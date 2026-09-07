@@ -1,0 +1,36 @@
+name: Build ArenaClient
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish ArenaClient
+        run: >-
+          dotnet publish ArenaClient.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish
+
+      - name: Upload ArenaClient artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArenaClient-win-x64
+          path: publish/ArenaClient.exe
+          if-no-files-found: error

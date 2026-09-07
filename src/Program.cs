@@ -15,6 +15,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
+    private const string PlaceholderGamePath = "Select your CS 1.6 root folder...";
     private readonly Label steamStatus = new();
     private readonly Label gameStatus = new();
     private readonly Label accountStatus = new();
@@ -22,6 +23,7 @@ public sealed class MainForm : Form
     private readonly TextBox gamePath = new();
     private readonly Button installButton = new();
     private readonly Button launchButton = new();
+    private SteamIdentity? steamIdentity;
 
     public MainForm()
     {
@@ -76,7 +78,7 @@ public sealed class MainForm : Form
         gameStatus.AutoSize = true;
         card.Controls.Add(gameStatus);
 
-        gamePath.Text = "Select your CS 1.6 root folder...";
+        gamePath.Text = PlaceholderGamePath;
         gamePath.ReadOnly = true;
         gamePath.ForeColor = Color.FromArgb(190, 195, 205);
         gamePath.BackColor = Color.FromArgb(35, 38, 45);
@@ -125,7 +127,7 @@ public sealed class MainForm : Form
 
         Controls.Add(new Label
         {
-            Text = "ArenaClient downloads the official Arena package, verifies it, backs up replaced files, and installs directly into cstrike.",
+            Text = "Steam identity is read locally. ArenaClient does not ask for or store your Steam password.",
             ForeColor = Color.FromArgb(125, 130, 140),
             AutoSize = true,
             Location = new Point(46, 490)
@@ -136,11 +138,26 @@ public sealed class MainForm : Form
 
     private void RefreshSteamState()
     {
-        var steam = Process.GetProcessesByName("steam").Length > 0;
-        steamStatus.Text = steam ? "Steam: ONLINE" : "Steam: NOT RUNNING";
-        steamStatus.ForeColor = steam ? Color.LightGreen : Color.OrangeRed;
-        launchButton.Enabled = steam;
-        accountStatus.Text = steam ? "Account: Steam detected" : "Account: waiting for Steam";
+        var steamRunning = Process.GetProcessesByName("steam").Length > 0;
+        steamIdentity = steamRunning ? SteamIdentityReader.TryGetCurrentIdentity() : null;
+
+        steamStatus.Text = steamRunning ? "Steam: ONLINE" : "Steam: NOT RUNNING";
+        steamStatus.ForeColor = steamRunning ? Color.LightGreen : Color.OrangeRed;
+
+        if (steamIdentity is not null)
+        {
+            accountStatus.Text = $"Steam: {steamIdentity.PersonaName} | SteamID64: {steamIdentity.SteamId64}";
+            accountStatus.ForeColor = Color.LightGreen;
+        }
+        else
+        {
+            accountStatus.Text = steamRunning
+                ? "Account: Steam is running, but no active identity was found"
+                : "Account: waiting for Steam";
+            accountStatus.ForeColor = Color.FromArgb(170, 175, 185);
+        }
+
+        launchButton.Enabled = steamRunning && steamIdentity is not null && gamePath.Text != PlaceholderGamePath;
     }
 
     private void BrowseGameFolder()
@@ -161,15 +178,23 @@ public sealed class MainForm : Form
 
         gamePath.Text = dialog.SelectedPath;
         gameStatus.Text = "Game: CS 1.6 detected";
+        RefreshSteamState();
     }
 
     private async Task InstallArenaAsync()
     {
-        if (gamePath.Text == "Select your CS 1.6 root folder..." || !Directory.Exists(gamePath.Text))
+        if (gamePath.Text == PlaceholderGamePath || !Directory.Exists(gamePath.Text))
         {
             BrowseGameFolder();
-            if (!Directory.Exists(gamePath.Text))
+            if (gamePath.Text == PlaceholderGamePath || !Directory.Exists(gamePath.Text))
                 return;
+        }
+
+        RefreshSteamState();
+        if (steamIdentity is null)
+        {
+            MessageBox.Show("Start Steam and sign in before installing CS Arena.", "CS Arena");
+            return;
         }
 
         SetBusy(true);
@@ -188,7 +213,7 @@ public sealed class MainForm : Form
             {
                 gameStatus.Text = $"Game: CS Arena ready - version {result.Version}";
                 MessageBox.Show(
-                    $"Arena files installed: {result.Files}\nBackup: {result.BackupPath}",
+                    $"Arena files installed: {result.Files}\nBackup: {result.BackupPath}\nSteam: {steamIdentity.PersonaName}\nSteamID64: {steamIdentity.SteamId64}",
                     "CS Arena");
             }
             else
@@ -200,24 +225,35 @@ public sealed class MainForm : Form
         finally
         {
             SetBusy(false);
+            RefreshSteamState();
         }
     }
 
     private void SetBusy(bool busy)
     {
         installButton.Enabled = !busy;
-        launchButton.Enabled = !busy && Process.GetProcessesByName("steam").Length > 0;
+        launchButton.Enabled = !busy && steamIdentity is not null && gamePath.Text != PlaceholderGamePath;
     }
 
     private void LaunchGame()
     {
-        if (!Directory.Exists(gamePath.Text))
+        RefreshSteamState();
+
+        if (steamIdentity is null)
+        {
+            MessageBox.Show("Steam must be running and signed in.", "CS Arena");
+            return;
+        }
+
+        if (gamePath.Text == PlaceholderGamePath || !Directory.Exists(gamePath.Text))
         {
             MessageBox.Show("Select your CS 1.6 folder first.", "CS Arena");
             return;
         }
 
         var exe = Path.Combine(gamePath.Text, "hl.exe");
+        var launchArguments = $"-game cstrike +name \"{EscapeLaunchArgument(steamIdentity.PersonaName)}\"";
+
         if (File.Exists(exe))
         {
             Process.Start(new ProcessStartInfo
@@ -225,7 +261,7 @@ public sealed class MainForm : Form
                 FileName = exe,
                 WorkingDirectory = gamePath.Text,
                 UseShellExecute = true,
-                Arguments = "-game cstrike"
+                Arguments = launchArguments
             });
             return;
         }
@@ -236,6 +272,9 @@ public sealed class MainForm : Form
             UseShellExecute = true
         });
     }
+
+    private static string EscapeLaunchArgument(string value)
+        => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     private static string? FindSteamInstallPath()
     {

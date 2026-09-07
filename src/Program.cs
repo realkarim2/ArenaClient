@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Microsoft.Win32;
 
 namespace ArenaClient;
 
@@ -15,7 +14,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string PlaceholderGamePath = "Select your CS 1.6 root folder...";
+    private const string PlaceholderGamePath = "CS 1.6 auto-detecting...";
     private readonly Label steamStatus = new();
     private readonly Label gameStatus = new();
     private readonly Label accountStatus = new();
@@ -24,6 +23,7 @@ public sealed class MainForm : Form
     private readonly Button installButton = new();
     private readonly Button launchButton = new();
     private SteamIdentity? steamIdentity;
+    private Cs16Install? cs16;
 
     public MainForm()
     {
@@ -72,7 +72,7 @@ public sealed class MainForm : Form
         accountStatus.AutoSize = true;
         card.Controls.Add(accountStatus);
 
-        gameStatus.Text = "Game: CS 1.6 not selected";
+        gameStatus.Text = "Game: auto-detecting...";
         gameStatus.Font = new Font("Segoe UI", 10, FontStyle.Bold);
         gameStatus.Location = new Point(28, 100);
         gameStatus.AutoSize = true;
@@ -83,20 +83,8 @@ public sealed class MainForm : Form
         gamePath.ForeColor = Color.FromArgb(190, 195, 205);
         gamePath.BackColor = Color.FromArgb(35, 38, 45);
         gamePath.Location = new Point(28, 135);
-        gamePath.Size = new Size(600, 32);
+        gamePath.Size = new Size(736, 32);
         card.Controls.Add(gamePath);
-
-        var browse = new Button
-        {
-            Text = "BROWSE",
-            Size = new Size(120, 32),
-            Location = new Point(644, 134),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(45, 48, 55),
-            ForeColor = Color.White
-        };
-        browse.Click += (_, _) => BrowseGameFolder();
-        card.Controls.Add(browse);
 
         progress.Minimum = 0;
         progress.Maximum = 100;
@@ -127,19 +115,20 @@ public sealed class MainForm : Form
 
         Controls.Add(new Label
         {
-            Text = "Steam identity is read locally. ArenaClient does not ask for or store your Steam password.",
+            Text = "Steam identity is used automatically. ArenaClient does not ask for or store your Steam password.",
             ForeColor = Color.FromArgb(125, 130, 140),
             AutoSize = true,
             Location = new Point(46, 490)
         });
 
-        RefreshSteamState();
+        RefreshState();
     }
 
-    private void RefreshSteamState()
+    private void RefreshState()
     {
         var steamRunning = Process.GetProcessesByName("steam").Length > 0;
         steamIdentity = steamRunning ? SteamIdentityReader.TryGetCurrentIdentity() : null;
+        cs16 ??= Cs16Locator.Find();
 
         steamStatus.Text = steamRunning ? "Steam: ONLINE" : "Steam: NOT RUNNING";
         steamStatus.ForeColor = steamRunning ? Color.LightGreen : Color.OrangeRed;
@@ -157,7 +146,20 @@ public sealed class MainForm : Form
             accountStatus.ForeColor = Color.FromArgb(170, 175, 185);
         }
 
-        launchButton.Enabled = steamRunning && steamIdentity is not null && gamePath.Text != PlaceholderGamePath;
+        if (cs16 is not null)
+        {
+            gamePath.Text = cs16.RootPath;
+            gameStatus.Text = "Game: CS 1.6 detected automatically";
+            gameStatus.ForeColor = Color.LightGreen;
+        }
+        else
+        {
+            gamePath.Text = PlaceholderGamePath;
+            gameStatus.Text = "Game: CS 1.6 not found in Steam libraries";
+            gameStatus.ForeColor = Color.Orange;
+        }
+
+        launchButton.Enabled = steamIdentity is not null && cs16 is not null;
     }
 
     private void BrowseGameFolder()
@@ -170,31 +172,31 @@ public sealed class MainForm : Form
         if (dialog.ShowDialog() != DialogResult.OK)
             return;
 
-        if (!Directory.Exists(Path.Combine(dialog.SelectedPath, "cstrike")))
+        if (!Directory.Exists(Path.Combine(dialog.SelectedPath, "cstrike")) ||
+            !File.Exists(Path.Combine(dialog.SelectedPath, "hl.exe")))
         {
-            MessageBox.Show("This folder does not contain cstrike.", "CS Arena");
+            MessageBox.Show("This folder is not a valid CS 1.6 installation.", "CS Arena");
             return;
         }
 
-        gamePath.Text = dialog.SelectedPath;
-        gameStatus.Text = "Game: CS 1.6 detected";
-        RefreshSteamState();
+        cs16 = new Cs16Install(dialog.SelectedPath, Path.Combine(dialog.SelectedPath, "hl.exe"));
+        RefreshState();
     }
 
     private async Task InstallArenaAsync()
     {
-        if (gamePath.Text == PlaceholderGamePath || !Directory.Exists(gamePath.Text))
-        {
-            BrowseGameFolder();
-            if (gamePath.Text == PlaceholderGamePath || !Directory.Exists(gamePath.Text))
-                return;
-        }
-
-        RefreshSteamState();
+        RefreshState();
         if (steamIdentity is null)
         {
             MessageBox.Show("Start Steam and sign in before installing CS Arena.", "CS Arena");
             return;
+        }
+
+        if (cs16 is null)
+        {
+            BrowseGameFolder();
+            if (cs16 is null)
+                return;
         }
 
         SetBusy(true);
@@ -205,7 +207,7 @@ public sealed class MainForm : Form
         {
             var installer = new ArenaPackInstaller();
             var result = await installer.InstallAsync(
-                gamePath.Text,
+                cs16.RootPath,
                 ArenaPackInstaller.DefaultManifestUrl,
                 new Progress<int>(value => progress.Value = value));
 
@@ -225,60 +227,41 @@ public sealed class MainForm : Form
         finally
         {
             SetBusy(false);
-            RefreshSteamState();
+            RefreshState();
         }
     }
 
     private void SetBusy(bool busy)
     {
         installButton.Enabled = !busy;
-        launchButton.Enabled = !busy && steamIdentity is not null && gamePath.Text != PlaceholderGamePath;
+        launchButton.Enabled = !busy && steamIdentity is not null && cs16 is not null;
     }
 
     private void LaunchGame()
     {
-        RefreshSteamState();
-
+        RefreshState();
         if (steamIdentity is null)
         {
             MessageBox.Show("Steam must be running and signed in.", "CS Arena");
             return;
         }
 
-        if (gamePath.Text == PlaceholderGamePath || !Directory.Exists(gamePath.Text))
+        if (cs16 is null)
         {
-            MessageBox.Show("Select your CS 1.6 folder first.", "CS Arena");
+            MessageBox.Show("CS 1.6 was not found. Install CS 1.6 through Steam first.", "CS Arena");
             return;
         }
 
-        var exe = Path.Combine(gamePath.Text, "hl.exe");
         var launchArguments = $"-game cstrike +name \"{EscapeLaunchArgument(steamIdentity.PersonaName)}\"";
-
-        if (File.Exists(exe))
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = exe,
-                WorkingDirectory = gamePath.Text,
-                UseShellExecute = true,
-                Arguments = launchArguments
-            });
-            return;
-        }
-
         Process.Start(new ProcessStartInfo
         {
-            FileName = "steam://run/10",
-            UseShellExecute = true
+            FileName = cs16.ExecutablePath,
+            WorkingDirectory = cs16.RootPath,
+            UseShellExecute = true,
+            Arguments = launchArguments
         });
     }
 
     private static string EscapeLaunchArgument(string value)
         => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
-
-    private static string? FindSteamInstallPath()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
-        return key?.GetValue("SteamPath") as string;
-    }
 }
